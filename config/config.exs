@@ -65,7 +65,7 @@ if Mix.env() == :test do
     username: "postgres",
     # sobelow_skip ["Config.Secrets"]
     password: "postgres",
-    database: "ash_oban_test",
+    database: "ash_oban_test_research_onerror_combined",
     hostname: "localhost",
     pool: Ecto.Adapters.SQL.Sandbox
 

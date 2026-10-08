@@ -12,6 +12,14 @@ defmodule AshOban.Transformers.DefineSchedulers do
   def after?(_), do: true
 
   def transform(dsl) do
+    # Check before generating workers. An error from a verifier, which runs
+    # after compilation, is only reported as a warning.
+    with :ok <- AshOban.Verifiers.VerifyOnError.verify(dsl) do
+      define_schedulers(dsl)
+    end
+  end
+
+  defp define_schedulers(dsl) do
     module = Transformer.get_persisted(dsl, :module)
 
     dsl
@@ -458,7 +466,7 @@ defmodule AshOban.Transformers.DefineSchedulers do
 
     on_error_transaction? =
       can_transact? && trigger.on_error &&
-        on_error.transaction? && trigger.lock_for_update?
+        Map.get(on_error, :transaction?, false) && trigger.lock_for_update?
 
     trigger_action = Ash.Resource.Info.action(dsl, trigger.action)
 
@@ -780,46 +788,56 @@ defmodule AshOban.Transformers.DefineSchedulers do
                     domain: unquote(domain)
                   )
 
-                if unquote(action_type) == :update do
-                  Ash.bulk_update!(
-                    query,
-                    unquote(trigger.on_error),
-                    %{error: error},
-                    authorize?: authorize?,
-                    actor: actor,
-                    tenant: tenant,
-                    domain: unquote(domain),
-                    context:
-                      AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
-                    strategy: [:atomic, :atomic_batches, :stream],
-                    return_errors?: true,
-                    skip_unknown_inputs: [:error],
-                    notify?: true,
-                    return_records?: true
-                  )
-                else
-                  Ash.bulk_destroy!(
-                    query,
-                    unquote(trigger.on_error),
-                    %{error: error},
-                    authorize?: authorize?,
-                    actor: actor,
-                    tenant: tenant,
-                    domain: unquote(domain),
-                    domain: unquote(domain),
-                    context:
-                      AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
-                    strategy: [:atomic, :atomic_batches, :stream],
-                    return_errors?: true,
-                    skip_unknown_inputs: [:error],
-                    notify?: true
-                  )
-                end
+                unquote(log_final_error)
 
-                if unquote(trigger.on_error_fails_job?) do
-                  reraise error, stacktrace
-                else
-                  :ok
+                result =
+                  if unquote(action_type) == :update do
+                    Ash.bulk_update!(
+                      query,
+                      unquote(trigger.on_error),
+                      %{error: error},
+                      authorize?: authorize?,
+                      actor: actor,
+                      tenant: tenant,
+                      domain: unquote(domain),
+                      context:
+                        AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
+                      strategy: [:atomic, :atomic_batches, :stream],
+                      return_errors?: true,
+                      skip_unknown_inputs: [:error],
+                      notify?: true,
+                      return_records?: true
+                    )
+                  else
+                    Ash.bulk_destroy!(
+                      query,
+                      unquote(trigger.on_error),
+                      %{error: error},
+                      authorize?: authorize?,
+                      actor: actor,
+                      tenant: tenant,
+                      domain: unquote(domain),
+                      domain: unquote(domain),
+                      context:
+                        AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
+                      strategy: [:atomic, :atomic_batches, :stream],
+                      return_errors?: true,
+                      skip_unknown_inputs: [:error],
+                      notify?: true,
+                      return_records?: true
+                    )
+                  end
+
+                case result do
+                  %Ash.BulkResult{records: []} ->
+                    {:cancel, :trigger_no_longer_applies}
+
+                  _ ->
+                    if unquote(trigger.on_error_fails_job?) do
+                      reraise error, stacktrace
+                    else
+                      :ok
+                    end
                 end
 
               {:error, error} ->
@@ -988,10 +1006,15 @@ defmodule AshOban.Transformers.DefineSchedulers do
       end
     else
       quote location: :keep do
-        def handle_error(_job, error, primary_key, stacktrace) do
+        def handle_error(job, error, primary_key, stacktrace) do
           case AshOban.check_for_oban_return(error) do
             nil ->
-              unquote(log_final_error)
+              if job.attempt == job.max_attempts do
+                unquote(log_final_error)
+              else
+                unquote(log_error)
+              end
+
               reraise error, stacktrace
 
             result ->
@@ -1101,7 +1124,7 @@ defmodule AshOban.Transformers.DefineSchedulers do
             ash_error = Ash.Error.to_ash_error(error, __STACKTRACE__)
 
             case AshOban.check_for_oban_return(ash_error) do
-              nil -> reraise error, __STACKTRACE__
+              nil -> handle_error(job, ash_error, primary_key, __STACKTRACE__)
               result -> result
             end
         end

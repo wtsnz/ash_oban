@@ -392,7 +392,7 @@ defmodule AshOban do
       on_error: [
         type: :atom,
         doc:
-          "An update action to call after the last attempt has failed. See the getting started guide for more."
+          "An update or destroy action to call after the last attempt has failed. Receives the error as an `error` argument and the Oban job in context."
       ],
       on_error_fails_job?: [
         type: :boolean,
@@ -804,7 +804,8 @@ defmodule AshOban do
     verifiers: [
       AshOban.Verifiers.VerifyModuleNames,
       AshOban.Verifiers.VerifyUseTenantFromRecord,
-      AshOban.Verifiers.VerifyChunks
+      AshOban.Verifiers.VerifyChunks,
+      AshOban.Verifiers.VerifyOnError
     ],
     transformers: [
       AshOban.Transformers.SetDefaults,

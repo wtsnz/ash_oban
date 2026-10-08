@@ -189,7 +189,10 @@ If the trigger has a `where`, the worker reads the record again with it before t
 - The read uses the trigger's worker read action, actor, tenant and authorization, so the actor must be able to read the record.
 - Generic actions don't run in a transaction unless they set `transaction? true`. With a transaction and `lock_for_update?` on, the read happens inside it and locks the record until the action finishes. Without one, the record can still change between the read and the action.
 - The read happens after the action's input is built, so its preparations have already run.
-- Generic-action triggers don't support `on_error`.
+- Generic-action triggers support an update or destroy `on_error` action on the last failed attempt. The handler receives `%{error: error}` and the job at `context.source_context.ash_oban.job`.
+- Failure handling reads the record again with the trigger filter, worker read action, actor, authorization and job tenant. A missing record cancels the job. With a transactional, non-atomic handler and `lock_for_update?`, the record is read and locked again inside the handler transaction. Atomic handlers apply the filter to the bulk operation.
+- `on_error_fails_job? false` completes the job after a successful handler; `true` preserves the original failure. A failing handler fails the job. Snooze and cancel signals bypass the handler.
+- Existing generic triggers with `on_error` configured will now run it. Review downstream final-attempt workarounds before upgrading to avoid duplicate handling.
 
 ### Accessing the Oban Job
 
