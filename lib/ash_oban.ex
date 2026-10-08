@@ -258,7 +258,7 @@ defmodule AshOban do
         type: :boolean,
         default: true,
         doc:
-          "If `true`, and the action is not atomic but runs in a transaction, the record is read again inside that transaction with the trigger's `where` and locked for update before the action runs. If it no longer matches, the job is cancelled. Only applies to data layers that can lock."
+          "For standard workers, if `true` and the update or destroy action is non-atomic and transactional, the record is re-read using the worker read action and trigger's `where`, then locked for update inside the action's transaction. If it no longer matches, the job is cancelled. Requires a data layer that supports locking. Does not apply to chunk workers."
       ],
       worker_module_name: [
         type: :module,

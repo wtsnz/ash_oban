@@ -32,7 +32,12 @@ defmodule AshOban.Test.LockingEts do
   def can?(resource, feature), do: @ets.can?(resource, feature)
 
   @impl true
-  def lock(query, _lock_type, _resource), do: {:ok, query}
+  def lock(query, _lock_type, resource) do
+    unless in_transaction?(resource),
+      do: raise("lock requested outside the simulated transaction")
+
+    {:ok, query}
+  end
 
   @impl true
   def in_transaction?(_resource), do: Process.get(@key, false)

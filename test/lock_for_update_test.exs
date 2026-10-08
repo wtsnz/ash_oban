@@ -49,6 +49,26 @@ defmodule AshOban.LockForUpdateTest do
           scheduler_module_name AshOban.LockForUpdateTest.Ticket.Scheduler.Close
         end
 
+        trigger :close_with_prepended_hook do
+          action :close_with_prepended_hook
+          where expr(state == :open)
+          scheduler_cron false
+          queue :triggered_lock_for_update_close
+          worker_module_name AshOban.LockForUpdateTest.Ticket.Worker.CloseWithPrependedHook
+          scheduler_module_name AshOban.LockForUpdateTest.Ticket.Scheduler.CloseWithPrependedHook
+        end
+
+        trigger :fail_atomically do
+          action :fail_atomically
+          where expr(state == :open)
+          on_error :mark_failed
+          max_attempts 1
+          scheduler_cron false
+          queue :triggered_lock_for_update_close
+          worker_module_name AshOban.LockForUpdateTest.Ticket.Worker.FailAtomically
+          scheduler_module_name AshOban.LockForUpdateTest.Ticket.Scheduler.FailAtomically
+        end
+
         trigger :fail_to_close do
           action :fail
           where expr(state == :open)
@@ -66,7 +86,7 @@ defmodule AshOban.LockForUpdateTest do
       uuid_primary_key :id
 
       attribute :state, :atom,
-        constraints: [one_of: [:open, :paid, :closed, :failed]],
+        constraints: [one_of: [:open, :paid, :closed, :failed, :never]],
         default: :open,
         allow_nil?: false,
         public?: true
@@ -83,6 +103,26 @@ defmodule AshOban.LockForUpdateTest do
         require_atomic? false
         change PayBeforeTransaction
         change set_attribute(:state, :closed)
+      end
+
+      # Its own prepended hook must still run after the trigger's re-read.
+      update :close_with_prepended_hook do
+        require_atomic? false
+        change PayBeforeTransaction
+
+        change before_action(
+                 fn changeset, _ ->
+                   send(self(), {:hook_ran, changeset.data.state})
+                   changeset
+                 end,
+                 prepend?: true
+               )
+
+        change set_attribute(:state, :closed)
+      end
+
+      update :fail_atomically do
+        validate attribute_equals(:state, :never)
       end
 
       update :fail do
@@ -140,8 +180,25 @@ defmodule AshOban.LockForUpdateTest do
     ticket = Ash.create!(Ticket, %{}, authorize?: false)
     :persistent_term.put({PayBeforeTransaction, :enabled?}, true)
 
-    capture_log(fn -> run(ticket, :fail_to_close) end)
+    capture_log(fn -> assert %{cancelled: 1} = run(ticket, :fail_to_close) end)
 
+    assert stored_state(ticket) == :paid
+  end
+
+  test "re-checks `where` before the action's own prepended hooks" do
+    ticket = Ash.create!(Ticket, %{}, authorize?: false)
+    :persistent_term.put({PayBeforeTransaction, :enabled?}, true)
+
+    assert %{cancelled: 1} = run(ticket, :close_with_prepended_hook)
+    refute_received {:hook_ran, _}
+    assert stored_state(ticket) == :paid
+  end
+
+  test "re-checks `where` for a non-atomic on_error action after an atomic action fails" do
+    ticket = Ash.create!(Ticket, %{}, authorize?: false)
+    :persistent_term.put({PayBeforeTransaction, :enabled?}, true)
+
+    capture_log(fn -> assert %{cancelled: 1} = run(ticket, :fail_atomically) end)
     assert stored_state(ticket) == :paid
   end
 end

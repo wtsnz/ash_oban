@@ -10,7 +10,7 @@ defmodule AshOban.OnErrorRecursionTest.Resource do
     extensions: [AshOban]
 
   ets do
-    private? true
+    private? false
   end
 
   attributes do

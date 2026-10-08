@@ -147,12 +147,19 @@ When not using Oban Pro, all crons are simply loaded on boot time and there is n
 
 ## Locking
 
-For an update or destroy trigger, the worker first reads the record with the trigger's `where`, and cancels the job if it no longer matches. A record can still change between that read and the action, so:
+For standard workers with a non-atomic update or destroy action, the worker first reads the record using `worker_read_action` (or the configured fallback) and the trigger's `where`. It cancels the job if no record matches.
 
-- if the action is atomic, the `where` is also part of the update itself;
-- otherwise, if `lock_for_update?` is `true` (the default), the action runs in a transaction and the data layer can lock, the record is read again inside the action's transaction with the trigger's `where`, and locked for update, before the action's own `before_action` hooks run. If it no longer matches, the job is cancelled.
+If `lock_for_update?` is `true` (the default), the action is transactional, and the data layer supports `FOR UPDATE`, the worker re-reads the record inside the action's transaction using the same read action, actor, authorization setting, tenant, and trigger filter. A record that no longer matches cancels the job, including when this happens during an `on_error` action. Otherwise, the worker locks the record before running the action's registered `before_action` hooks. Error actions use their own transaction and atomic settings.
 
-The lock is only held inside the action's transaction, so `before_transaction` and `after_transaction` hooks run without it.
+The worker takes the lock after changeset construction and `before_transaction` hooks. Those changes and validations are not rerun when the re-read replaces `changeset.data`. Derive values that must use the locked record in a `before_action` hook, or use atomic expressions.
+
+`before_transaction` and `after_transaction` hooks normally run outside the lock. If the caller already opened a transaction around the worker, its transaction boundaries also apply.
+
+The lock protects the target record. It does not lock related records used by the trigger's filter or freeze time-dependent expressions. Actions that require those conditions to remain true must coordinate the other records themselves.
+
+The atomic bulk path applies the trigger's filter to the write query. If nothing matches, it performs no write and the job completes successfully. It does not use the locked re-read described above.
+
+Chunk workers use bulk operations and do not use this locking behavior. Their non-atomic fallback currently requires actions to provide their own locking and eligibility checks.
 
 ## Authorizing actions
 
