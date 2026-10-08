@@ -168,20 +168,46 @@ end
 
 Tags set via `tags` are merged with any tags you also set in `worker_opts`, so both lists are combined.
 
+### Triggers with generic actions
+
+A trigger's action can be a generic action. It's given the record's primary key, as a map with string keys, rather than the record:
+
+```elixir
+trigger :send_reminder do
+  action :send_reminder
+  where expr(state == :open)
+end
+
+action :send_reminder do
+  argument :primary_key, :map, allow_nil?: false
+  run SendReminder
+end
+```
+
+If the trigger has a `where`, the worker reads the record again with it before the action's implementation runs, and cancels the job if it no longer matches. Without a `where`, the action always runs.
+
+- The read uses the trigger's worker read action, actor, tenant and authorization, so the actor must be able to read the record.
+- Generic actions don't run in a transaction unless they set `transaction? true`. With a transaction and `lock_for_update?` on, the read happens inside it and locks the record until the action finishes. Without one, the record can still change between the read and the action.
+- The read happens after the action's input is built, so its preparations have already run.
+- Generic-action triggers support an update or destroy `on_error` action on the last failed attempt. The handler receives `%{error: error}` and the job at `context.source_context.ash_oban.job`.
+- Failure handling reads the record again with the trigger filter, worker read action, actor, authorization and job tenant. A missing record cancels the job. With a transactional, non-atomic handler and `lock_for_update?`, the record is read and locked again inside the handler transaction. Atomic handlers apply the filter to the bulk operation.
+- `on_error_fails_job? false` completes the job after a successful handler; `true` preserves the original failure. A failing handler fails the job. Snooze and cancel signals bypass the handler.
+- Existing generic triggers with `on_error` configured will now run it. Review downstream final-attempt workarounds before upgrading to avoid duplicate handling.
+
 ### Accessing the Oban Job
 
-The underlying `%Oban.Job{}` struct is available in the context of any action run by a trigger or scheduled action. Access it via `context.ash_oban.job`:
+The underlying `%Oban.Job{}` struct is available in the context of any action run by a trigger or scheduled action. Access it via `context.source_context.ash_oban.job`:
 
 ```elixir
 # In a change module
 def change(changeset, _opts, context) do
-  job = context.ash_oban.job
+  job = context.source_context.ash_oban.job
   Ash.Changeset.put_context(changeset, :oban_tags, job.tags)
 end
 
 # In a generic action implementation
 def run(input, _opts, context) do
-  job = context.ash_oban.job
+  job = context.source_context.ash_oban.job
   Logger.info("Attempt #{job.attempt} of #{job.max_attempts}")
   :ok
 end

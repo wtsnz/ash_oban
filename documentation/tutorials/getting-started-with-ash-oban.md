@@ -104,7 +104,7 @@ See the DSL documentation for more: [`AshOban`](/documentation/dsl/DSL-AshOban.m
 
 ## Handling Errors
 
-Error handling is done by adding an `on_error` to your trigger. This is an update action that will get the error as an argument called `:error`. The error will be an Ash error class. These error classes can contain many kinds of errors, so you will need to figure out handling specific errors on your own. Be sure to add the `:error` argument to the action if you want to receive the error.
+Error handling is done by adding an `on_error` to your trigger. This is an update or destroy action that will get the error as an argument called `:error`. Generic-action triggers support the same handlers. The error will be an Ash error class. These error classes can contain many kinds of errors, so you will need to figure out handling specific errors on your own. Be sure to add the `:error` argument to the action if you want to receive the error.
 
 This is _not_ foolproof. You want to be sure that your `on_error` action is as simple as possible, because if an exception is raised during the `on_error` action, the oban job will fail. If you are relying on your `on_error` logic to alter the resource to make it no longer apply to a trigger, consider making your action do _only that_. Then you can add another trigger watching for things in an errored state to do more rich error handling behavior.
 

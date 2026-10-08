@@ -12,6 +12,14 @@ defmodule AshOban.Transformers.DefineSchedulers do
   def after?(_), do: true
 
   def transform(dsl) do
+    # Check before generating workers. An error from a verifier, which runs
+    # after compilation, is only reported as a warning.
+    with :ok <- AshOban.Verifiers.VerifyOnError.verify(dsl) do
+      define_schedulers(dsl)
+    end
+  end
+
+  defp define_schedulers(dsl) do
     module = Transformer.get_persisted(dsl, :module)
 
     dsl
@@ -458,7 +466,7 @@ defmodule AshOban.Transformers.DefineSchedulers do
 
     on_error_transaction? =
       can_transact? && trigger.on_error &&
-        on_error.transaction? && trigger.lock_for_update?
+        Map.get(on_error, :transaction?, false) && trigger.lock_for_update?
 
     trigger_action = Ash.Resource.Info.action(dsl, trigger.action)
 
@@ -588,7 +596,19 @@ defmodule AshOban.Transformers.DefineSchedulers do
       )
 
     work =
-      work(trigger, worker, atomic?, trigger_action.type, pro?, read_action, resource, domain)
+      if trigger_action.type == :action do
+        generic_action_work(
+          trigger,
+          worker,
+          pro?,
+          read_action,
+          resource,
+          domain,
+          can_lock? && work_transaction?
+        )
+      else
+        work(trigger, worker, atomic?, trigger_action.type, pro?, read_action, resource, domain)
+      end
 
     backoff =
       case trigger.backoff do
@@ -768,46 +788,56 @@ defmodule AshOban.Transformers.DefineSchedulers do
                     domain: unquote(domain)
                   )
 
-                if unquote(action_type) == :update do
-                  Ash.bulk_update!(
-                    query,
-                    unquote(trigger.on_error),
-                    %{error: error},
-                    authorize?: authorize?,
-                    actor: actor,
-                    tenant: tenant,
-                    domain: unquote(domain),
-                    context:
-                      AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
-                    strategy: [:atomic, :atomic_batches, :stream],
-                    return_errors?: true,
-                    skip_unknown_inputs: [:error],
-                    notify?: true,
-                    return_records?: true
-                  )
-                else
-                  Ash.bulk_destroy!(
-                    query,
-                    unquote(trigger.on_error),
-                    %{error: error},
-                    authorize?: authorize?,
-                    actor: actor,
-                    tenant: tenant,
-                    domain: unquote(domain),
-                    domain: unquote(domain),
-                    context:
-                      AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
-                    strategy: [:atomic, :atomic_batches, :stream],
-                    return_errors?: true,
-                    skip_unknown_inputs: [:error],
-                    notify?: true
-                  )
-                end
+                unquote(log_final_error)
 
-                if unquote(trigger.on_error_fails_job?) do
-                  reraise error, stacktrace
-                else
-                  :ok
+                result =
+                  if unquote(action_type) == :update do
+                    Ash.bulk_update!(
+                      query,
+                      unquote(trigger.on_error),
+                      %{error: error},
+                      authorize?: authorize?,
+                      actor: actor,
+                      tenant: tenant,
+                      domain: unquote(domain),
+                      context:
+                        AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
+                      strategy: [:atomic, :atomic_batches, :stream],
+                      return_errors?: true,
+                      skip_unknown_inputs: [:error],
+                      notify?: true,
+                      return_records?: true
+                    )
+                  else
+                    Ash.bulk_destroy!(
+                      query,
+                      unquote(trigger.on_error),
+                      %{error: error},
+                      authorize?: authorize?,
+                      actor: actor,
+                      tenant: tenant,
+                      domain: unquote(domain),
+                      domain: unquote(domain),
+                      context:
+                        AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job),
+                      strategy: [:atomic, :atomic_batches, :stream],
+                      return_errors?: true,
+                      skip_unknown_inputs: [:error],
+                      notify?: true,
+                      return_records?: true
+                    )
+                  end
+
+                case result do
+                  %Ash.BulkResult{records: []} ->
+                    {:cancel, :trigger_no_longer_applies}
+
+                  _ ->
+                    if unquote(trigger.on_error_fails_job?) do
+                      reraise error, stacktrace
+                    else
+                      :ok
+                    end
                 end
 
               {:error, error} ->
@@ -976,10 +1006,15 @@ defmodule AshOban.Transformers.DefineSchedulers do
       end
     else
       quote location: :keep do
-        def handle_error(_job, error, primary_key, stacktrace) do
+        def handle_error(job, error, primary_key, stacktrace) do
           case AshOban.check_for_oban_return(error) do
             nil ->
-              unquote(log_final_error)
+              if job.attempt == job.max_attempts do
+                unquote(log_final_error)
+              else
+                unquote(log_error)
+              end
+
               reraise error, stacktrace
 
             result ->
@@ -1006,7 +1041,7 @@ defmodule AshOban.Transformers.DefineSchedulers do
     end
   end
 
-  defp work(trigger, worker, _atomic?, :action, pro?, _read_action, resource, domain) do
+  defp generic_action_work(trigger, worker, pro?, read_action, resource, domain, lock?) do
     function_name =
       if pro? do
         :process
@@ -1047,23 +1082,39 @@ defmodule AshOban.Transformers.DefineSchedulers do
                   unquote(Macro.escape(trigger.read_metadata))
                 )
 
-              unquote(resource)
-              |> Ash.ActionInput.new()
-              |> Ash.ActionInput.set_tenant(tenant)
-              |> Ash.ActionInput.set_context(
-                AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job)
-              )
-              |> Ash.ActionInput.for_action(
-                unquote(trigger.action),
-                input,
-                authorize?: authorize?,
-                actor: actor,
-                domain: unquote(domain),
-                skip_unknown_inputs: Map.keys(input)
-              )
-              |> Ash.run_action!()
+              # `recheck_where/7` throws this ref, rather than adding an error,
+              # so that the action's error handling can't turn the cancellation
+              # into an ordinary failure.
+              no_longer_applies = make_ref()
 
-              :ok
+              try do
+                unquote(resource)
+                |> Ash.ActionInput.new()
+                |> Ash.ActionInput.set_tenant(tenant)
+                |> Ash.ActionInput.set_context(
+                  AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job)
+                )
+                |> Ash.ActionInput.for_action(
+                  unquote(trigger.action),
+                  input,
+                  authorize?: authorize?,
+                  actor: actor,
+                  domain: unquote(domain),
+                  skip_unknown_inputs: Map.keys(input)
+                )
+                |> recheck_where(primary_key, authorize?, actor, tenant, job, no_longer_applies)
+                |> Ash.run_action!()
+
+                :ok
+              catch
+                :throw, ^no_longer_applies ->
+                  AshOban.debug(
+                    "Record with primary key #{inspect(primary_key)} no longer applies to trigger #{unquote(inspect(resource))}#{unquote(trigger.name)}",
+                    unquote(trigger.debug?)
+                  )
+
+                  {:cancel, :trigger_no_longer_applies}
+              end
 
             {:error, error} ->
               raise Ash.Error.to_ash_error(error)
@@ -1073,9 +1124,59 @@ defmodule AshOban.Transformers.DefineSchedulers do
             ash_error = Ash.Error.to_ash_error(error, __STACKTRACE__)
 
             case AshOban.check_for_oban_return(ash_error) do
-              nil -> reraise error, __STACKTRACE__
+              nil -> handle_error(job, ash_error, primary_key, __STACKTRACE__)
               result -> result
             end
+        end
+
+        # The record may no longer match the trigger's `where` by the time the
+        # job runs. Check again before the action runs, inside its transaction
+        # (locking the record) if it has one, and throw `no_longer_applies` if not.
+        if unquote(is_nil(trigger.where)) do
+          defp recheck_where(input, _primary_key, _authorize?, _actor, _tenant, _job, _ref),
+            do: input
+        else
+          defp recheck_where(
+                 input,
+                 primary_key,
+                 authorize?,
+                 actor,
+                 tenant,
+                 job,
+                 no_longer_applies
+               ) do
+            Ash.ActionInput.before_action(
+              input,
+              fn input ->
+                query()
+                |> Ash.Query.do_filter(primary_key)
+                |> Ash.Query.set_tenant(tenant)
+                |> Ash.Query.set_context(
+                  AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job)
+                )
+                |> Ash.Query.for_read(unquote(read_action), %{},
+                  authorize?: authorize?,
+                  actor: actor,
+                  domain: unquote(domain)
+                )
+                |> then(fn query ->
+                  if unquote(lock?), do: Ash.Query.lock(query, :for_update), else: query
+                end)
+                |> Ash.read_one()
+                |> case do
+                  {:ok, nil} ->
+                    throw(no_longer_applies)
+
+                  {:ok, _record} ->
+                    input
+
+                  {:error, error} ->
+                    Ash.ActionInput.add_error(input, error)
+                end
+              end,
+              prepend?: true
+            )
+          end
         end
 
         defp build_input(args, action_input, read_metadata) do
