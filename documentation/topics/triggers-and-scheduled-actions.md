@@ -168,20 +168,43 @@ end
 
 Tags set via `tags` are merged with any tags you also set in `worker_opts`, so both lists are combined.
 
+### Triggers with generic actions
+
+A trigger's action can be a generic action. It's given the record's primary key, as a map with string keys, rather than the record:
+
+```elixir
+trigger :send_reminder do
+  action :send_reminder
+  where expr(state == :open)
+end
+
+action :send_reminder do
+  argument :primary_key, :map, allow_nil?: false
+  run SendReminder
+end
+```
+
+If the trigger has a `where`, the worker reads the record again with it before the action's implementation runs, and cancels the job if it no longer matches. Without a `where`, the action always runs.
+
+- The read uses the trigger's worker read action, actor, tenant and authorization, so the actor must be able to read the record.
+- Generic actions don't run in a transaction unless they set `transaction? true`. With a transaction and `lock_for_update?` on, the read happens inside it and locks the record until the action finishes. Without one, the record can still change between the read and the action.
+- The read happens after the action's input is built, so its preparations have already run.
+- Generic-action triggers don't support `on_error`.
+
 ### Accessing the Oban Job
 
-The underlying `%Oban.Job{}` struct is available in the context of any action run by a trigger or scheduled action. Access it via `context.ash_oban.job`:
+The underlying `%Oban.Job{}` struct is available in the context of any action run by a trigger or scheduled action. Access it via `context.source_context.ash_oban.job`:
 
 ```elixir
 # In a change module
 def change(changeset, _opts, context) do
-  job = context.ash_oban.job
+  job = context.source_context.ash_oban.job
   Ash.Changeset.put_context(changeset, :oban_tags, job.tags)
 end
 
 # In a generic action implementation
 def run(input, _opts, context) do
-  job = context.ash_oban.job
+  job = context.source_context.ash_oban.job
   Logger.info("Attempt #{job.attempt} of #{job.max_attempts}")
   :ok
 end
