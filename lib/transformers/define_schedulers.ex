@@ -588,7 +588,19 @@ defmodule AshOban.Transformers.DefineSchedulers do
       )
 
     work =
-      work(trigger, worker, atomic?, trigger_action.type, pro?, read_action, resource, domain)
+      if trigger_action.type == :action do
+        generic_action_work(
+          trigger,
+          worker,
+          pro?,
+          read_action,
+          resource,
+          domain,
+          can_lock? && work_transaction?
+        )
+      else
+        work(trigger, worker, atomic?, trigger_action.type, pro?, read_action, resource, domain)
+      end
 
     backoff =
       case trigger.backoff do
@@ -1006,7 +1018,7 @@ defmodule AshOban.Transformers.DefineSchedulers do
     end
   end
 
-  defp work(trigger, worker, _atomic?, :action, pro?, _read_action, resource, domain) do
+  defp generic_action_work(trigger, worker, pro?, read_action, resource, domain, lock?) do
     function_name =
       if pro? do
         :process
@@ -1061,6 +1073,7 @@ defmodule AshOban.Transformers.DefineSchedulers do
                 domain: unquote(domain),
                 skip_unknown_inputs: Map.keys(input)
               )
+              |> recheck_where(primary_key, authorize?, actor, tenant, job)
               |> Ash.run_action!()
 
               :ok
@@ -1076,6 +1089,50 @@ defmodule AshOban.Transformers.DefineSchedulers do
               nil -> reraise error, __STACKTRACE__
               result -> result
             end
+        end
+
+        # The record may no longer match the trigger's `where` by the time the
+        # job runs. Check again before the action runs, inside its transaction
+        # (locking the record) if it has one, and cancel the job if not.
+        if unquote(is_nil(trigger.where)) do
+          defp recheck_where(input, _primary_key, _authorize?, _actor, _tenant, _job), do: input
+        else
+          defp recheck_where(input, primary_key, authorize?, actor, tenant, job) do
+            Ash.ActionInput.before_action(
+              input,
+              fn input ->
+                query()
+                |> Ash.Query.do_filter(primary_key)
+                |> Ash.Query.set_tenant(tenant)
+                |> Ash.Query.set_context(
+                  AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job)
+                )
+                |> Ash.Query.for_read(unquote(read_action), %{},
+                  authorize?: authorize?,
+                  actor: actor,
+                  domain: unquote(domain)
+                )
+                |> then(fn query ->
+                  if unquote(lock?), do: Ash.Query.lock(query, :for_update), else: query
+                end)
+                |> Ash.read_one()
+                |> case do
+                  {:ok, nil} ->
+                    Ash.ActionInput.add_error(
+                      input,
+                      AshOban.Errors.CancelJob.exception(reason: :trigger_no_longer_applies)
+                    )
+
+                  {:ok, _record} ->
+                    input
+
+                  {:error, error} ->
+                    Ash.ActionInput.add_error(input, error)
+                end
+              end,
+              prepend?: true
+            )
+          end
         end
 
         defp build_input(args, action_input, read_metadata) do

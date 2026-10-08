@@ -41,7 +41,8 @@ if Mix.env() == :test do
       triggered_tags_tagged_action: 10,
       triggered_snooze_oban_job: 10,
       triggered_cancel_oban_job: 10,
-      triggered_lock_for_update_close: 10
+      triggered_lock_for_update_close: 10,
+      triggered_generic_action_where: 10
     ]
 
   config :ash_oban, :oban_pro,
