@@ -252,13 +252,13 @@ defmodule AshOban do
         type: :boolean,
         default: false,
         doc:
-          "If set to `true`, detailed debug logging will be enabled for this trigger. You can also set `config :ash_oban, debug_all_triggers?: true` to enable debug logging for all triggers. If the action has `transaction?: false` this is automatically false."
+          "If set to `true`, detailed debug logging will be enabled for this trigger. You can also set `config :ash_oban, debug_all_triggers?: true` to enable debug logging for all triggers."
       ],
       lock_for_update?: [
         type: :boolean,
         default: true,
         doc:
-          "For standard workers, if `true` and the update or destroy action is non-atomic and transactional, the record is re-read using the worker read action and trigger's `where`, then locked for update inside the action's transaction. If it no longer matches, the job is cancelled. Requires a data layer that supports locking. Does not apply to chunk workers."
+          "For standard workers, if `true` and the update or destroy action is non-atomic and transactional, the record is re-read using the worker read action and trigger's `where`, then locked for update inside the action's transaction. If it no longer matches, the job is cancelled. Requires a data layer that supports locking. With a non-transactional action (`transaction? false`) it has no effect: the record isn't locked, and `where` isn't checked again. Does not apply to chunk workers."
       ],
       worker_module_name: [
         type: :module,

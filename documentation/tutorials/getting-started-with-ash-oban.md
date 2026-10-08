@@ -149,7 +149,9 @@ When not using Oban Pro, all crons are simply loaded on boot time and there is n
 
 For standard workers with a non-atomic update or destroy action, the worker first reads the record using `worker_read_action` (or the configured fallback) and the trigger's `where`. It cancels the job if no record matches.
 
-If `lock_for_update?` is `true` (the default), the action is transactional, and the data layer supports `FOR UPDATE`, the worker re-reads the record inside the action's transaction using the same read action, actor, authorization setting, tenant, and trigger filter. A record that no longer matches cancels the job, including when this happens during an `on_error` action. Otherwise, the worker locks the record before running the action's registered `before_action` hooks. Error actions use their own transaction and atomic settings.
+If `lock_for_update?` is `true` (the default), the action is transactional, and the data layer supports `FOR UPDATE`, the worker re-reads the record inside the action's transaction using the same read action, actor, authorization setting, tenant, and trigger filter. A record that no longer matches cancels the job, including when this happens during an `on_error` action. The re-read runs before the action's own `before_action` hooks. Error actions use their own transaction and atomic settings.
+
+With a non-transactional action (`transaction? false`), `lock_for_update?` has no effect. The worker doesn't lock the record or check `where` again, so a record that stops matching after the first read is still updated. Use a transactional action, or check the condition in the action itself.
 
 The worker takes the lock after changeset construction and `before_transaction` hooks. Those changes and validations are not rerun when the re-read replaces `changeset.data`. Derive values that must use the locked record in a `before_action` hook, or use atomic expressions.
 
