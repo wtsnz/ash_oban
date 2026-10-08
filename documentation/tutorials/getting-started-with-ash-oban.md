@@ -145,34 +145,14 @@ PS: `state :deleted` is also idempotent, so there is no issue with deploying wit
 
 When not using Oban Pro, all crons are simply loaded on boot time and there is no side effects to simply deleting an unused trigger.
 
-## Transactions
+## Locking
 
-AshOban adds two new transaction reasons, as it uses explicit transactions to ensure that each triggered record is properly locked and executed in serially.
+For an update or destroy trigger, the worker first reads the record with the trigger's `where`, and cancels the job if it no longer matches. A record can still change between that read and the action, so:
 
-```elixir
-%{
-  type: :ash_oban_trigger,
-  metadata: %{
-    resource: Resource,
-    trigger: :trigger_name,
-    primary_key: %{primary_key_fields: value}
-  }
-}
-```
+- if the action is atomic, the `where` is also part of the update itself;
+- otherwise, if `lock_for_update?` is `true` (the default), the action runs in a transaction and the data layer can lock, the record is read again inside the action's transaction with the trigger's `where`, and locked for update, before the action's own `before_action` hooks run. If it no longer matches, the job is cancelled.
 
-and
-
-```elixir
-%{
-  type: :ash_oban_trigger_error,
-  metadata: %{
-    resource: Resource
-    trigger: :trigger_name,
-    primary_key: %{primary_key_fields: value},
-    error: <the error (this will be an ash error class)>
-  }
-}
-```
+The lock is only held inside the action's transaction, so `before_transaction` and `after_transaction` hooks run without it.
 
 ## Authorizing actions
 

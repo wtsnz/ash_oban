@@ -258,7 +258,7 @@ defmodule AshOban do
         type: :boolean,
         default: true,
         doc:
-          "If `true`, a transaction will be started before looking up the record, and it will be locked for update. Typically you should leave this on unless you have before/after/around transaction hooks."
+          "If `true`, and the action is not atomic but runs in a transaction, the record is read again inside that transaction with the trigger's `where` and locked for update before the action runs. If it no longer matches, the job is cancelled. Only applies to data layers that can lock."
       ],
       worker_module_name: [
         type: :module,

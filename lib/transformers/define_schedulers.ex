@@ -475,18 +475,13 @@ defmodule AshOban.Transformers.DefineSchedulers do
         Map.get(trigger_action, :atomic_upgrade_with) ||
         Ash.Resource.Info.primary_action!(resource, :read).name
 
+    # The worker's first read runs outside any transaction, so a lock taken
+    # there would be released straight away. `prepare/6` locks and re-reads the
+    # record inside the action's transaction instead.
     lock_on_read =
-      if can_lock? && trigger.lock_for_update? && work_transaction? do
-        quote do
-          def lock_on_read(query) do
-            Ash.Query.lock(query, :for_update)
-          end
-        end
-      else
-        quote do
-          def lock_on_read(query) do
-            query
-          end
+      quote do
+        def lock_on_read(query) do
+          query
         end
       end
 
@@ -548,9 +543,9 @@ defmodule AshOban.Transformers.DefineSchedulers do
           Ash.Changeset.filter(changeset, filter)
         end
       else
-        # if the entire work function is in a transaction, the record will
-        # already be locked if it can be
-        if can_lock? && trigger.lock_for_update? && !work_transaction? do
+        # the work function isn't run in a transaction, so lock and re-read
+        # the record inside the action's transaction
+        if can_lock? && trigger.lock_for_update? do
           get_and_lock_code
         else
           quote do
@@ -566,9 +561,9 @@ defmodule AshOban.Transformers.DefineSchedulers do
           Ash.Changeset.filter(changeset, filter)
         end
       else
-        # if the entire work function is in a transaction, the record will
-        # already be locked if it can be
-        if can_lock? && trigger.lock_for_update? && !work_transaction? do
+        # the work function isn't run in a transaction, so lock and re-read
+        # the record inside the action's transaction
+        if can_lock? && trigger.lock_for_update? do
           get_and_lock_code
         else
           quote do
