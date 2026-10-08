@@ -1076,24 +1076,39 @@ defmodule AshOban.Transformers.DefineSchedulers do
                   unquote(Macro.escape(trigger.read_metadata))
                 )
 
-              unquote(resource)
-              |> Ash.ActionInput.new()
-              |> Ash.ActionInput.set_tenant(tenant)
-              |> Ash.ActionInput.set_context(
-                AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job)
-              )
-              |> Ash.ActionInput.for_action(
-                unquote(trigger.action),
-                input,
-                authorize?: authorize?,
-                actor: actor,
-                domain: unquote(domain),
-                skip_unknown_inputs: Map.keys(input)
-              )
-              |> recheck_where(primary_key, authorize?, actor, tenant, job)
-              |> Ash.run_action!()
+              # `recheck_where/7` throws this ref, rather than adding an error,
+              # so that the action's error handling can't turn the cancellation
+              # into an ordinary failure.
+              no_longer_applies = make_ref()
 
-              :ok
+              try do
+                unquote(resource)
+                |> Ash.ActionInput.new()
+                |> Ash.ActionInput.set_tenant(tenant)
+                |> Ash.ActionInput.set_context(
+                  AshOban.build_context(unquote(Macro.escape(trigger.shared_context)), job)
+                )
+                |> Ash.ActionInput.for_action(
+                  unquote(trigger.action),
+                  input,
+                  authorize?: authorize?,
+                  actor: actor,
+                  domain: unquote(domain),
+                  skip_unknown_inputs: Map.keys(input)
+                )
+                |> recheck_where(primary_key, authorize?, actor, tenant, job, no_longer_applies)
+                |> Ash.run_action!()
+
+                :ok
+              catch
+                :throw, ^no_longer_applies ->
+                  AshOban.debug(
+                    "Record with primary key #{inspect(primary_key)} no longer applies to trigger #{unquote(inspect(resource))}#{unquote(trigger.name)}",
+                    unquote(trigger.debug?)
+                  )
+
+                  {:cancel, :trigger_no_longer_applies}
+              end
 
             {:error, error} ->
               raise Ash.Error.to_ash_error(error)
@@ -1110,11 +1125,20 @@ defmodule AshOban.Transformers.DefineSchedulers do
 
         # The record may no longer match the trigger's `where` by the time the
         # job runs. Check again before the action runs, inside its transaction
-        # (locking the record) if it has one, and cancel the job if not.
+        # (locking the record) if it has one, and throw `no_longer_applies` if not.
         if unquote(is_nil(trigger.where)) do
-          defp recheck_where(input, _primary_key, _authorize?, _actor, _tenant, _job), do: input
+          defp recheck_where(input, _primary_key, _authorize?, _actor, _tenant, _job, _ref),
+            do: input
         else
-          defp recheck_where(input, primary_key, authorize?, actor, tenant, job) do
+          defp recheck_where(
+                 input,
+                 primary_key,
+                 authorize?,
+                 actor,
+                 tenant,
+                 job,
+                 no_longer_applies
+               ) do
             Ash.ActionInput.before_action(
               input,
               fn input ->
@@ -1135,10 +1159,7 @@ defmodule AshOban.Transformers.DefineSchedulers do
                 |> Ash.read_one()
                 |> case do
                   {:ok, nil} ->
-                    Ash.ActionInput.add_error(
-                      input,
-                      AshOban.Errors.CancelJob.exception(reason: :trigger_no_longer_applies)
-                    )
+                    throw(no_longer_applies)
 
                   {:ok, _record} ->
                     input

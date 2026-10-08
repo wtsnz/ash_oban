@@ -32,6 +32,15 @@ defmodule AshOban.GenericActionWhereTest do
           scheduler_module_name AshOban.GenericActionWhereTest.Ticket.Scheduler.Remind
         end
 
+        trigger :remind_handled do
+          action :remind_handled
+          where expr(state == :open)
+          scheduler_cron false
+          queue :triggered_generic_action_where
+          worker_module_name AshOban.GenericActionWhereTest.Ticket.Worker.RemindHandled
+          scheduler_module_name AshOban.GenericActionWhereTest.Ticket.Scheduler.RemindHandled
+        end
+
         trigger :remind_always do
           action :remind
           scheduler_cron false
@@ -61,6 +70,18 @@ defmodule AshOban.GenericActionWhereTest do
 
       action :remind do
         argument :primary_key, :map, allow_nil?: false
+
+        run fn input, _ ->
+          send(AshOban.GenericActionWhereTest, {:reminded, input.arguments.primary_key["id"]})
+          :ok
+        end
+      end
+
+      # An error handler sees errors added to the input, so the cancellation
+      # mustn't be one.
+      action :remind_handled do
+        argument :primary_key, :map, allow_nil?: false
+        error_handler fn _input, _error -> "handled" end
 
         run fn input, _ ->
           send(AshOban.GenericActionWhereTest, {:reminded, input.arguments.primary_key["id"]})
@@ -101,6 +122,15 @@ defmodule AshOban.GenericActionWhereTest do
     test "is cancelled for a record that no longer matches its `where`" do
       ticket = Ash.create!(Ticket, %{}, authorize?: false)
       AshOban.run_trigger(ticket, :remind)
+      pay(ticket)
+
+      assert %{cancelled: 1} = Oban.drain_queue(queue: :triggered_generic_action_where)
+      refute_received {:reminded, _}
+    end
+
+    test "is cancelled when the action has an error handler" do
+      ticket = Ash.create!(Ticket, %{}, authorize?: false)
+      AshOban.run_trigger(ticket, :remind_handled)
       pay(ticket)
 
       assert %{cancelled: 1} = Oban.drain_queue(queue: :triggered_generic_action_where)
