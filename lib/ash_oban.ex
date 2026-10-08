@@ -26,6 +26,7 @@ defmodule AshOban do
 
     @type t :: %__MODULE__{
             name: atom,
+            description: String.t() | nil,
             action: atom,
             read_action: atom,
             queue: atom,
@@ -69,6 +70,7 @@ defmodule AshOban do
 
     defstruct [
       :name,
+      :description,
       :action,
       :read_action,
       :action_input,
@@ -205,6 +207,10 @@ defmodule AshOban do
       name: [
         type: :atom,
         doc: "A unique identifier for this trigger."
+      ],
+      description: [
+        type: :string,
+        doc: "An optional description for the trigger."
       ],
       action_input: [
         type: :map,
@@ -502,6 +508,7 @@ defmodule AshOban do
 
     @type t :: %__MODULE__{
             name: atom,
+            description: String.t() | nil,
             action: atom,
             cron: String.t(),
             action_input: map(),
@@ -523,6 +530,7 @@ defmodule AshOban do
 
     defstruct [
       :name,
+      :description,
       :action,
       :cron,
       :debug,
@@ -555,6 +563,10 @@ defmodule AshOban do
       name: [
         type: :atom,
         doc: "A unique identifier for this scheduled action."
+      ],
+      description: [
+        type: :string,
+        doc: "An optional description for the scheduled action."
       ],
       cron: [
         type: :string,
