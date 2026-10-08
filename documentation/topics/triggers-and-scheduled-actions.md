@@ -168,6 +168,24 @@ end
 
 Tags set via `tags` are merged with any tags you also set in `worker_opts`, so both lists are combined.
 
+### Triggers with generic actions
+
+A trigger's action can be a generic action. It's given the record's primary key, as a map with string keys, rather than the record:
+
+```elixir
+trigger :send_reminder do
+  action :send_reminder
+  where expr(state == :open)
+end
+
+action :send_reminder do
+  argument :primary_key, :map, allow_nil?: false
+  run SendReminder
+end
+```
+
+If the trigger has a `where`, the record is read again with it before the action runs, and the job is cancelled if it no longer matches. When the action runs in a transaction and `lock_for_update?` is on, that read happens inside the transaction and locks the record.
+
 ### Accessing the Oban Job
 
 The underlying `%Oban.Job{}` struct is available in the context of any action run by a trigger or scheduled action. Access it via `context.ash_oban.job`:
