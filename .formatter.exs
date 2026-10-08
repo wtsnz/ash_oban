@@ -12,6 +12,7 @@ spark_locals_without_parens = [
   chunks: 1,
   debug?: 1,
   default_actor: 1,
+  description: 1,
   domain: 1,
   extra_args: 1,
   list_tenants: 1,

@@ -120,6 +120,7 @@ end
 | Name | Type | Default | Docs |
 |------|------|---------|------|
 | [`action`](#oban-triggers-trigger-action){: #oban-triggers-trigger-action .spark-required} | `atom` |  | The action to be triggered. Defaults to the identifier of the resource plus the name of the trigger |
+| [`description`](#oban-triggers-trigger-description){: #oban-triggers-trigger-description } | `String.t` |  | An optional description for the trigger. |
 | [`action_input`](#oban-triggers-trigger-action_input){: #oban-triggers-trigger-action_input } | `map` |  | Static inputs to supply to the update/destroy action when it is called. Any metadata produced by `read_metadata` will overwrite these values. |
 | [`extra_args`](#oban-triggers-trigger-extra_args){: #oban-triggers-trigger-extra_args } | `map \| (any -> any)` |  | Additional arguments to merge into the job's arguments map. Can either be a map or a function that takes the record and returns a map. |
 | [`actor_persister`](#oban-triggers-trigger-actor_persister){: #oban-triggers-trigger-actor_persister } | `:none \| module` |  | An `AshOban.PersistActor` to use to store the actor. Defaults to to the configured `config :ash_oban, :actor_persister`. Set to `:none` to override the configured default. |
@@ -264,6 +265,7 @@ schedule name, cron
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
+| [`description`](#oban-scheduled_actions-schedule-description){: #oban-scheduled_actions-schedule-description } | `String.t` |  | An optional description for the scheduled action. |
 | [`action_input`](#oban-scheduled_actions-schedule-action_input){: #oban-scheduled_actions-schedule-action_input } | `map` |  | Inputs to supply to the action when it is called. |
 | [`list_tenants`](#oban-scheduled_actions-schedule-list_tenants){: #oban-scheduled_actions-schedule-list_tenants } | `list(any) \| (-> any) \| module` |  | A list of tenants or a function behaviour that returns a list of tenants this scheduled action should be run for. The action will be called once for each tenant. Falls back to the global `list_tenants` setting in the `oban` section if not set. |
 | [`action`](#oban-scheduled_actions-schedule-action){: #oban-scheduled_actions-schedule-action } | `atom` |  | The generic or create action to call when the schedule is triggered. |
